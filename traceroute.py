@@ -167,7 +167,7 @@ def traceroute(dest, timeout, max_ttl, assemble):
 def main():
     parser = argparse.ArgumentParser(prog="traceroute", 
                                      description="Tracerouting to hostname")
-    parser.add_argument("hostname")
+    parser.add_argument("hostname", help="Hostname of target")
     parser.add_argument("-t", "--timeout", type=float, default=3, 
                         help="Timeout for each packet in seconds (default 3s)")
     parser.add_argument("-m", "--maxhops", type=int, default=30, 
