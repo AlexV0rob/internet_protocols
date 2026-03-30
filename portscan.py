@@ -35,7 +35,7 @@ def check_smtp(sock):
             is_smtp = response.startswith("250 OK")
         except (socket.timeout, OSError):
             is_smtp = False
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         is_smtp = False
     finally:
         sock.settimeout(old_timeout)
@@ -54,7 +54,7 @@ def check_pop3(sock):
             is_pop3 = response.startswith("-ERR")
         except (socket.timeout, OSError):
             is_pop3 = False
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         is_pop3 = False
     finally:
         sock.settimeout(old_timeout)
@@ -73,7 +73,7 @@ def check_imap(sock):
             is_imap = response.startswith("A1 OK NOOP")
         except (socket.timeout, OSError):
             is_imap = False
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         is_imap = False
     finally:
         sock.settimeout(old_timeout)
@@ -86,7 +86,7 @@ def check_http(sock):
     try:
         response = sock.recv(1024).decode("utf-8").strip().upper()
         is_http = (response.startswith("HTTP/"))
-    except (socket.timeout, OSError):
+    except (socket.timeout, OSError, UnicodeDecodeError):
         is_http = False
     finally:
         sock.settimeout(old_timeout)
@@ -139,7 +139,7 @@ def check_udp_port(address, port):
 
 def scanner(scanner_func, address, ports_range):
     results = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=400) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=200) as executor:
         futures = [executor.submit(scanner_func, address, port)
                    for port in range(*ports_range)]
         for future in concurrent.futures.as_completed(futures):
