@@ -428,8 +428,8 @@ def main():
         print("Permission error, run this script as root (Administrator)")
     except socket.error as e:
         print("Error during data transfer: ", e)
-    # except Exception as e:
-    #     print(e)
+    except Exception as e:
+        print(e)
 
 if __name__ == "__main__":
     main()
