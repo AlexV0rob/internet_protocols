@@ -189,6 +189,8 @@ def main():
         except PermissionError:
             print("Permission error, run this script as root (Administrator)"
                   "or use only TCP scanning (-t or --tcp flag)")
+        except socket.error:
+            print("Couldn't resolve hostname")
 
 if __name__ == "__main__":
     main()
