@@ -27,7 +27,7 @@ DNS_REQUEST_TYPE = {
     255: "*", 256: "URI", 257: "CAA", 259: "DOA",
     32768: "TA", 32769: "DLV",
 }
-
+DNS_REQUESTS = {}
 DNS_CACHE = {}
 
 
@@ -80,9 +80,26 @@ def create_dns_header(id, qr, opcode, aa, rcode,
     return struct.pack("!HBBHHHH", id, third_octet, fourth_octet, 
                        qdcount, ancount, nscount, arcount)
 
+def clear_cache(address, type):
+    if address in DNS_CACHE and type in DNS_CACHE[address]:
+        dns_type = DNS_CACHE[address][type]
+        current_time = int(time.time())
+        index = 0
+        for _ in range(len(dns_type)):
+            record = dns_type[index]
+            if current_time - record["time_cached"] >= record["ttl"]:
+                dns_type.pop(index)
+            else:
+                index += 1
+        if not dns_type:
+            DNS_CACHE[address].pop(type)
+            if not DNS_CACHE[address]:
+                DNS_CACHE.pop(address)
+
 def add_answers_to_cache(answers):
     global DNS_CACHE
     for answer in answers:
+        clear_cache(answer["qname"], answer["qtype"])
         if answer["qname"] not in DNS_CACHE:
             DNS_CACHE[answer["qname"]] = {}
         if DNS_CACHE[answer["qname"]].get(answer["qtype"], None) is None:
@@ -91,10 +108,9 @@ def add_answers_to_cache(answers):
         value_cached = False
         current_time = int(time.time())
         for record in dns_type:
-            if current_time - record["time_cached"] > record["ttl"]:
-                dns_type.remove(record)
-            else:
-                value_cached = (record["data"] == answer["data"])
+            value_cached = (record["data"] == answer["data"])
+            if value_cached:
+                break
         if not value_cached:
             dns_type.append({
                 "data": answer["data"],
@@ -104,23 +120,28 @@ def add_answers_to_cache(answers):
 
 def ask_forwarder(forwarder, port, query_data):
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(10)
-        sock.connect((forwarder, port))
-        dns_packet_header = create_dns_header(
-            random.randint(0, 65535), 0, query_data["opcode"], 
-            0, 0, 1, 0, 0, 0, rd=1
-        )
-        dns_packet_data, _ = create_dns_query(
-            query_data["qname"], query_data["qtype"]
-        )
-        dns_packet = dns_packet_header + dns_packet_data
-        sock.send(dns_packet)
+        sock = DNS_REQUESTS.get(
+            (query_data["qname"], query_data["qtype"]), None)
+        if sock is None:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            DNS_REQUESTS[(query_data["qname"], query_data["qtype"])] = sock
+            sock.settimeout(10)
+            sock.connect((forwarder, port))
+            dns_packet_header = create_dns_header(
+                random.randint(0, 65535), 0, query_data["opcode"], 
+                0, 0, 1, 0, 0, 0, rd=1
+            )
+            dns_packet_data, _ = create_dns_query(
+                query_data["qname"], query_data["qtype"]
+            )
+            dns_packet = dns_packet_header + dns_packet_data
+            sock.send(dns_packet)
         forwarder_response = sock.recv(1024)
         packet = parse_dns_packet(forwarder_response)
         add_answers_to_cache(packet["answers"])
         add_answers_to_cache(packet["authoritatives"])
         add_answers_to_cache(packet["additionals"])
+        DNS_REQUESTS.pop((query_data["qname"], query_data["qtype"]))
     finally:
         sock.close()
 
@@ -171,20 +192,10 @@ def recursive_search(query_data):
 
 def check_cache(address, type):
     global DNS_CACHE
+    clear_cache(address, type)
     if address in DNS_CACHE and type in DNS_CACHE[address]:
-        dns_type = DNS_CACHE[address][type]
-        current_time = int(time.time())
-        for record in dns_type:
-            if current_time - record["time_cached"] > record["ttl"]:
-                dns_type.remove(record)
-        if len(dns_type) == 0:
-            DNS_CACHE[address].pop(type)
-            if len(DNS_CACHE[address]) == 0:
-                DNS_CACHE.pop(address)
-            return []
-        return dns_type
-    else:
-        return []
+        return DNS_CACHE[address][type]
+    return []
 
 def create_queries(queries_data, index=12, labels_indexes=None):
     if labels_indexes == None:
@@ -210,7 +221,7 @@ def not_in_cache(forwarder, port, query_data, recursion=True):
             address_info = check_cache(query_data["qname"], query_data["qtype"])
             if address_info:
                 rcode = 0
-        except socket.error:
+        except (socket.error, OSError):
             pass
     return (address_info, rcode)
 
@@ -218,6 +229,8 @@ def create_responses(queries_data, forwarder, port,
                      index=12, labels_indexes=None, recursion=True):
     if labels_indexes == None:
         labels_indexes = {}
+    new_labels_indexes = dict(labels_indexes)
+    new_index = index
     responses = []
     cached_list = []
     rcode = 0
@@ -231,17 +244,22 @@ def create_responses(queries_data, forwarder, port,
             if rcode == 2:
                 responses.clear()
                 break
+        current_time = int(time.time())
         for record in address_info:
-            time_difference = int(time.time()) - record["time_cached"]
-            response, labels_indexes = create_dns_response(
-                query_data["qname"], query_data["qtype"], 
-                record["ttl"] - time_difference, 
-                record["data"], index, labels_indexes
+            time_difference = current_time - record["time_cached"]
+            new_ttl = record["ttl"] - time_difference
+            if new_ttl <= 0:
+                return create_responses(queries_data, forwarder, port,
+                                        index, labels_indexes, recursion)
+            response, new_labels_indexes = create_dns_response(
+                query_data["qname"], query_data["qtype"], new_ttl, 
+                record["data"], new_index, new_labels_indexes
             )
-            index += len(response)
-            responses.append(response)
+            new_index += len(response)
+            if response != b'':
+                responses.append(response)
         cached_list.append(cached)
-    return (responses, index, labels_indexes, rcode, cached_list)
+    return (responses, new_index, labels_indexes, rcode, cached_list)
 
 def create_dns_response_packet(forwarder, port, queries_data):
     dns_id = queries_data[0]["id"]
@@ -355,7 +373,7 @@ def parse_dns_packet(packet_bytes):
         packet["additionals"].append(query)
     return packet
 
-def flatterize_queries(packet):
+def flatten_queries(packet):
     queries = []
     for question in packet["questions"]:
         general_info = dict(packet)
@@ -373,34 +391,39 @@ def start_server(port, forwarder, forwarder_port):
         my_ip = socket.gethostbyname(socket.gethostname())
         if forwarder == my_ip and forwarder_port == port:
             raise Exception("Can't use the same server as forwarder")
-        sock.bind((socket.gethostbyname(socket.gethostname()), port))
-        print("Server started")
+        server_address = (socket.gethostbyname(socket.gethostname()), port)
+        sock.bind(server_address)
+        print(f"Server started on {server_address}")
         while True:
             print("Waiting...")
-            data, address = sock.recvfrom(1024)
-            packet = parse_dns_packet(data)
-            queries = flatterize_queries(packet)
-            response, cached_list = create_dns_response_packet(
-                forwarder, forwarder_port, queries
-            )
-            client = f"{address[0]}:{address[1]}"
-            for i in range(len(queries)):
-                if i >= len(cached_list):
-                    cached = "no response"
-                elif cached_list[i]:
-                    cached = "cache"
-                else:
-                    cached = "forwarder"
-                dns_type = DNS_REQUEST_TYPE.get(queries[i]["qtype"], "UNKNOWN")
-                dns_name = queries[i]["qname"]
-                print(client, dns_type, dns_name, cached, sep=', ')
-            sock.sendto(response, address)
+            try:
+                data, address = sock.recvfrom(1024)
+                packet = parse_dns_packet(data)
+                queries = flatten_queries(packet)
+                response, cached_list = create_dns_response_packet(
+                    forwarder, forwarder_port, queries
+                )
+                client = f"{address[0]}:{address[1]}"
+                for i in range(len(queries)):
+                    if i >= len(cached_list):
+                        cached = "no response"
+                    elif cached_list[i]:
+                        cached = "cache"
+                    else:
+                        cached = "forwarder"
+                    dns_type = DNS_REQUEST_TYPE.get(queries[i]["qtype"], "UNKNOWN")
+                    dns_name = queries[i]["qname"]
+                    print(client, dns_type, dns_name, cached, sep=', ')
+                sock.sendto(response, address)
+            except (socket.error, OSError):
+                pass
     finally:
         sock.close()
 
 def server_port(string):
     server_info = string.split(":")
-    ip = ":".join(server_info[:-1])
+    ip = (server_info[0] if len(server_info) == 1 
+          else ':'.join(server_info[:-1]))
     port = 53
     if len(server_info) > 1:
         port = int(server_info[-1])

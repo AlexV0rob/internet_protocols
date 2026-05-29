@@ -72,21 +72,13 @@ def formSNTP(li, vn, stratum, interval, accuracy,
                        cli_time, time_recv, time_send, 0, 0, 0)
     return sntp
 
-# def formUDP(src_port, dest_port, data):
-#     src = socket.htons(src_port)
-#     dest = socket.htons(dest_port)
-#     length = socket.htons(8 + len(data))
-#     udp = struct.pack("HHHH", src, dest, length, 0) + data
-#     check = socket.htons(checksum(udp))
-#     return struct.pack("HHHH", src, dest, length, check) + data
-
 def process_client(sock, data, delay, shift, upd_time):
     packet = data[0]
     client_info = data[1]
     print(f"Client {client_info[0]}:{client_info[1]} has connected")
     recv_time = convert_date_to_ntp(get_current_time() + shift + delay)
     cli_info = unpack_ntp(packet[:(12 * 8)])
-    my_ip = 0 #socket.inet_aton(socket.gethostbyname(socket.gethostname()))
+    my_ip = 0
     send_time = convert_date_to_ntp(get_current_time() + shift + delay)
     sntp = formSNTP(cli_info[0] >> 6, SNTP_VERSION, 15, 4, 
                     cli_info[3], cli_info[4], cli_info[5], 

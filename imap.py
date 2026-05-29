@@ -182,7 +182,7 @@ def mail_exists(lines):
         if "EXISTS" in line.upper():
             return int(line.split()[1])
 
-def get_mailbox(sock, mail_range):
+def get_mailbox(sock, mail_range, filename):
     response = socket_send(sock, "SELECT INBOX".encode())
     mail_count = 0
     if response[1] != "OK":
@@ -201,7 +201,7 @@ def get_mailbox(sock, mail_range):
         mail_info = get_mail(sock, number)
         mail_info["number"] = number
         mails_info.append(mail_info)
-    create_table(mails_info)
+    create_table(mails_info, filename)
 
 def longest_line(mails_info, key, additional_key=None):
     max_len = 0
@@ -275,7 +275,7 @@ def create_body(columns_order, mails_info, main_lengths, attachments_lengths):
         body += sep
     return body
 
-def create_table(mails_info):
+def create_table(mails_info, filename):
     columns_order = ["number", "from", "to", "subject", "date", 
                      "attachments_count", "attachments"]
     headers = {
@@ -305,8 +305,11 @@ def create_table(mails_info):
                            main_lengths, attachment_lengths)
     body = create_body(columns_order, mails_info, 
                        main_lengths, attachment_lengths)
-    with open("C:\\Users\\aleks\\OneDrive\\Desktop\\python\\internet\\mail.txt", 'w', encoding="utf-16") as f:
-        print(header, body, file=f, sep='')
+    if filename is not None:
+        with open(filename, 'w', encoding="utf-16") as f:
+            print(header, body, file=f, sep='')
+    else:
+        print(header, body, sep='')
 
 def socket_send(sock, string, code=None):
     global CODE
@@ -365,7 +368,7 @@ def create_connection(server, port):
     sock.settimeout(10)
     return sock
 
-def fetch_mail(open_ssl, server, port, username, mail_range):
+def fetch_mail(open_ssl, server, port, username, mail_range, filename):
     try:
         try:
             sock = create_connection(server, port)
@@ -395,14 +398,15 @@ def fetch_mail(open_ssl, server, port, username, mail_range):
         if open_ssl and not ssl_connected:
             print("Couldn't create SSL/TLS connection")
         authenticate(sock, username)
-        get_mailbox(sock, mail_range)
+        get_mailbox(sock, mail_range, filename)
         socket_send(sock, "LOGOUT".encode())
     finally:
         sock.close()
 
 def server_port(string):
     server_info = string.split(":")
-    ip = ":".join(server_info[:-1])
+    ip = (server_info[0] if len(server_info) == 1 
+          else ':'.join(server_info[:-1]))
     port = 143
     if len(server_info) > 1:
         port = int(server_info[-1])
@@ -434,13 +438,17 @@ def main():
     parser.add_argument("-n", nargs='+', type=int, default=(1, -1), 
                         dest="mail_range",
                         help="Range of mail (N1 [N2])")
-    parser.add_argument("-u", "--user", required=True,
+    parser.add_argument("-u", "--user", type=str, required=True,
                         help="Username")
+    parser.add_argument("-f", "--filename", type=str,
+                        help=("File to save result table. "
+                              "If not set result will be printed into "
+                              "console"))
     args = parser.parse_args()
     try:
         ip, port = server_port(args.server)
         mail_range = normalize_mail_range(args.mail_range)
-        fetch_mail(args.ssl, ip, port, args.user, mail_range)
+        fetch_mail(args.ssl, ip, port, args.user, mail_range, args.filename)
     except PermissionError:
         print("Permission error, run this script as root (Administrator)")
     except socket.error as e:

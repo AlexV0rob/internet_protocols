@@ -55,11 +55,15 @@ def glue_message_lines(serv_code, lines):
     return message
 
 def create_header(from_who, to, subject):
-    f_line = f"From: <{from_who}>"
-    t_line = f"To: <{to}>"
-    s_line = f"Subject: {subject}"
-    m_line = f"MIME-Version: 1.0"
-    return f"{f_line}\r\n{t_line}\r\n{s_line}\r\n{m_line}\r\n".encode()
+    from_encoded = base64.b64encode(from_who.encode())
+    to_encoded = base64.b64encode(to.encode())
+    subj_encoded = base64.b64encode(subject.encode())
+    f_line = b"From: =?UTF-8?B?"
+    t_line = b"?=\r\nTo: =?UTF-8?B?"
+    s_line = b"?=\r\nSubject: =?UTF-8?B?"
+    m_line = b"?=\r\nMIME-Version: 1.0\r\n"
+    return (f_line + from_encoded + t_line + to_encoded
+            + s_line + subj_encoded + m_line)
 
 def create_body(filenames):
     boundary = "happy_pictures_mail"
@@ -92,10 +96,12 @@ def authenticate(sock, verbose):
         password = getpass.getpass("Password: ")
         socket_send(sock, base64.b64encode(password.encode()), 
                                print_request=False, print_answer=verbose)
+        return login
     except TypeError as e:
         raise TypeError(f"Couldn't authenticate: {e}")
 
-def send_mail(sock, from_who, to, subject, filenames, verbose, size, num=0):
+def send_mail(sock, sender, from_who, to, subject, 
+              filenames, verbose, size, num=0):
     mail = create_header(from_who, to, subject) + create_body(filenames)
     fragmented = False
     if size >= 0:
@@ -109,9 +115,9 @@ def send_mail(sock, from_who, to, subject, filenames, verbose, size, num=0):
             raise Exception(f"Can't send {filenames[0]} (too large)")
         if fragmented:
             print("Fragmented mail to several smaller ones due to mail size")
-        mail_message = f"MAIL FROM: <{from_who}> SIZE={len(mail)}"
+        mail_message = f"MAIL FROM: <{sender}> SIZE={len(mail)}"
     else:
-        mail_message = f"MAIL FROM: <{from_who}>"
+        mail_message = f"MAIL FROM: <{sender}>"
     socket_send(sock, mail_message.encode(), 
                 print_request=verbose, print_answer=verbose)
     socket_send(sock, f"RCPT TO: <{to}>".encode(), 
@@ -142,6 +148,8 @@ def socket_send(sock, string, wait_response=True,
     if wait_response:
         response = parse_response(sock.recv(1024).decode())
         message = glue_message_lines(response[1], response[2])
+        if response[0].startswith('5'):
+            raise Exception(f"Got error code from server: {message}")
         if print_answer:
             print(f"Server: {message}")
         return response
@@ -221,10 +229,11 @@ def send_pics(open_ssl, server, port, to, from_who,
                     features = send_helo(sock, verbose)
             if open_ssl and not ssl_connected:
                 print("Couldn't create SSL/TLS connection")
+            sender = from_who
             if auth:
-                authenticate(sock, verbose)
+                sender = authenticate(sock, verbose)
             size = get_size(features)
-            send_mail(sock, from_who, to, subject, files, verbose, size)
+            send_mail(sock, sender, from_who, to, subject, files, verbose, size)
             socket_send(sock, "QUIT".encode(), 
                         print_request=verbose, print_answer=verbose)
         finally:
@@ -234,7 +243,8 @@ def send_pics(open_ssl, server, port, to, from_who,
 
 def server_port(string):
     server_info = string.split(":")
-    ip = ":".join(server_info[:-1])
+    ip = (server_info[0] if len(server_info) == 1 
+          else ':'.join(server_info[:-1]))
     port = 25
     if len(server_info) > 1:
         port = int(server_info[-1])
